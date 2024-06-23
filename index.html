@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Cesium 3D Visualization and Dashboard</title>
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.80/Build/Cesium/Cesium.js"></script>
+    <link href="https://cesium.com/downloads/cesiumjs/releases/1.80/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        /* Global styles */
+        html, body {
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        /* Container styles */
+        #container {
+            display: flex;
+            flex-direction: row;
+            height: 100%;
+        }
+
+        /* Header styles */
+        #header {
+            display: flex;
+            align-items: center;
+            padding: 10px;
+            background-color: #8de620;
+            border-bottom: 1px solid #ccc;
+        }
+
+        /* Logo styles */
+        #logo {
+            height: 50px; /* Adjust the height of the logo */
+            margin-right: 10px; /* Add margin to separate from the title */
+        }
+
+        /* Title styles */
+        h1 {
+            font-weight: bold;
+            margin: 0; /* Remove default margin */
+        }
+
+        /* Cesium container styles */
+        #cesiumContainer {
+            width: 70%;
+            height: 100%;
+            float: left;
+        }
+
+        /* Chart container styles */
+        #chart-container {
+            width: 30%;
+            height: 100%;
+            overflow-y: auto; /* Allow charts to scroll vertically if needed */
+            display: flex;
+            flex-direction: column;
+            align-items: center; /* Center items horizontally */
+            padding: 10px;
+        }
+
+        /* Individual chart styles */
+        .chart {
+            width: 100%; /* Adjust the width as needed */
+            height: 250px; /* Fixed height for each chart */
+            margin-bottom: 10px;
+        }
+
+        /* Adjusted pie chart styles */
+        #pieChart {
+            max-width: 100%; /* Allow it to scale to container width */
+            height: auto; /* Let height adjust automatically based on width */
+            max-height: 250px; /* Limit maximum height */
+        }
+    </style>
+</head>
+
+<body>
+    <div id="header">
+        <img id="logo" src="hft.ico" alt="HFT Logo">
+        <h1>Cesium 3D Energy Dashboard of Stöckach</h1>
+    </div>
+    <div id="container">
+        <div id="cesiumContainer"></div>
+        <div id="chart-container">
+            <canvas id="pieChart" class="chart"></canvas>
+            <canvas id="yocChart" class="chart"></canvas>
+            <canvas id="specificSChart" class="chart"></canvas>
+        </div>
+    </div>
+    <script>
+        const terrainURL = 'https://web3d.basemap.de/cesium/dgm5-mesh';
+        var osmProvider = new Cesium.OpenStreetMapImageryProvider({
+            url: 'https://a.tile.openstreetmap.org/'
+        });
+
+        var viewer = new Cesium.Viewer('cesiumContainer', {
+            vrButton: true,
+            geocoder: false,
+            navigationHelpButton: false,
+            selectionIndicator: false,
+            shadows: true,
+            timeline: false,
+            sceneModePicker: true,
+            imageryProvider: osmProvider
+        });
+
+        var tileset = viewer.scene.primitives.add(new Cesium.Cesium3DTileset({
+            url: "http://127.0.0.1:5501/tileset/tileset.json"
+        }));
+
+        tileset.style = new Cesium.Cesium3DTileStyle({
+            "color": {
+                "conditions": [
+                    ["Number(${Specific_s}) < 60", "color('#2F91F9')"],
+                    ["Number(${Specific_s}) < 120", "color('#2BFF01')"],
+                    ["Number(${Specific_s}) < 170", "color('#FFF201')"],
+                    ["Number(${Specific_s}) < 230", "color('#e8af02')"],
+                    ["Number(${Specific_s}) > 230", "color('#f02d13')"],
+                    ["true", "color('#E8F1F2', 0.5)"]
+                ]
+            }
+        });
+
+        var pieChart, yocChart, specificSChart;
+
+        Cesium.when(tileset.readyPromise).then(function () {
+            viewer.flyTo(tileset);
+
+            var allSpecificSFromTiles = [];
+            var allYearOfCoFromTiles = [];
+
+            function extractAttributes(tile, specificSArray, yearOfCoArray) {
+                if (tile.content && tile.content.featuresLength) {
+                    for (var i = 0; i < tile.content.featuresLength; i++) {
+                        var feature = tile.content.getFeature(i);
+                        var specificS = Number(feature.getProperty('Specific_s'));
+                        var yearOfCo = feature.getProperty('Year_of_co');
+
+                        if (!isNaN(specificS)) {
+                            specificSArray.push(specificS);
+                        }
+                        if (yearOfCo) {
+                            yearOfCoArray.push(yearOfCo);
+                        }
+                    }
+                }
+            }
+
+            tileset.tileLoad.addEventListener(function (tile) {
+                extractAttributes(tile, allSpecificSFromTiles, allYearOfCoFromTiles);
+            });
+
+            tileset.allTilesLoaded.addEventListener(function () {
+                createCharts(allSpecificSFromTiles, allYearOfCoFromTiles);
+            });
+
+            function createCharts(specificSData, yearOfCoData) {
+                // Destroy existing charts if they exist
+                if (pieChart) pieChart.destroy();
+                if (yocChart) yocChart.destroy();
+                if (specificSChart) specificSChart.destroy();
+
+                // Categorize Specific_s values
+                var specificSCategories = {
+                    'Below 60': 0,
+                    '60-120': 0,
+                    '120-170': 0,
+                    '170-230': 0,
+                    'Above 230': 0
+                };
+
+                specificSData.forEach(function (value) {
+                    if (value < 60) {
+                        specificSCategories['Below 60']++;
+                    } else if (value < 120) {
+                        specificSCategories['60-120']++;
+                    } else if (value < 170) {
+                        specificSCategories['120-170']++;
+                    } else if (value < 230) {
+                        specificSCategories['170-230']++;
+                    } else {
+                        specificSCategories['Above 230']++;
+                    }
+                });
+
+                // Prepare data for Specific_s pie chart
+                var specificSLabels = Object.keys(specificSCategories);
+                var specificSValues = Object.values(specificSCategories);
+
+                // Specific_s pie chart
+                var pieCtx = document.getElementById('pieChart').getContext('2d');
+                pieChart = new Chart(pieCtx, {
+                    type: 'pie',
+                    data: {
+                        labels: specificSLabels,
+                        datasets: [{
+                            label: 'Number of Buildings',
+                            data: specificSValues,
+                            backgroundColor: [
+                                '#2F91F9',
+                                '#2BFF01',
+                                '#FFF201',
+                                '#e8af02',
+                                '#f02d13'
+                            ],
+                            borderColor: 'rgba(255, 255, 255, 1)',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            legend: {
+                                position: 'right',
+                            },
+                            title: {
+                                display: true,
+                                text: 'Specific Heating Demand (kWh/m2.a)',
+                                font: {
+                                    size: 16,
+                                    weight: 'bold'
+                                }
+                            }
+                        },
+                        tooltips: {
+                            callbacks: {
+                                label: function (context) {
+                                    return context.label + ': ' + context.formattedValue + ' buildings';
+                                }
+                            }
+                        }
+                    }
+                });
+
+
+                // Count the occurrences of each building age
+                var yocCounts = {};
+                yearOfCoData.forEach(function (yearOfCo) {
+                    if (yocCounts[yearOfCo]) {
+                        yocCounts[yearOfCo]++;
+                    } else {
+                        yocCounts[yearOfCo] = 1;
+                    }
+                });
+
+                // Prepare the chart data for building year of construction
+                var yocLabels = Object.keys(yocCounts);
+                var yocValues = Object.values(yocCounts);
+
+                // Year_of_co bar chart
+                var yocCtx = document.getElementById('yocChart').getContext('2d');
+                yocChart = new Chart(yocCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: yocLabels,
+                        datasets: [{
+                            label: 'No. of buildings',
+                            data: yocValues,
+                            backgroundColor: 'rgba(75, 192, 192, 0.5)',
+                            borderColor: 'rgba(75, 192, 192, 1)',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            legend: {
+                                display: false,
+                            },
+                            title: {
+                                display: true,
+                                text: 'Building Distribution According to Year of Construction',
+                                font: {
+                                    size: 16,
+                                    weight: 'bold'
+                                }
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                stepSize: 1
+                            },
+                            x: {
+                                title: {
+                                    display: true,
+                                    text: 'Year of Construction'
+                                }
+                            }
+                        }
+                    }
+                });
+
+                // Define the building class specificS object
+                var buildingClassSpecificS = {
+                    "A+": 0,
+                    "A": 0,
+                    "B": 0,
+                    "C": 0,
+                    "D": 0,
+                    "E": 0,
+                    "F": 0,
+                    "G": 0,
+                    "H": 0
+                };
+
+                // Categorize Specific_s values into building classes
+                specificSData.forEach(function (specificS) {
+                    if (specificS >= 251) {
+                        buildingClassSpecificS["H"]++;
+                    } else if (specificS >= 201) {
+                        buildingClassSpecificS["G"]++;
+                    } else if (specificS >= 151) {
+                        buildingClassSpecificS["F"]++;
+                    } else if (specificS >= 126) {
+                        buildingClassSpecificS["E"]++;
+                    } else if (specificS >= 101) {
+                        buildingClassSpecificS["D"]++;
+                    } else if (specificS >= 76) {
+                        buildingClassSpecificS["C"]++;
+                    } else if (specificS >= 51) {
+                        buildingClassSpecificS["B"]++;
+                    } else if (specificS >= 26) {
+                        buildingClassSpecificS["A"]++;
+                    } else {
+                        buildingClassSpecificS["A+"]++;
+                    }
+                });
+
+                // Prepare data for the bar chart for building Specific_s
+                var buildingSSLabels = Object.keys(buildingClassSpecificS);
+                var buildingSSValues = Object.values(buildingClassSpecificS);
+
+                // Specific_s distribution chart using Chart.js
+                var specificSCtx = document.getElementById('specificSChart').getContext('2d');
+                specificSChart = new Chart(specificSCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: buildingSSLabels,
+                        datasets: [{
+                            label: 'No. of Buildings',
+                            data: buildingSSValues,
+                            backgroundColor: [
+                                '#2F91F9',
+                                '#2BFF01',
+                                '#FFF201',
+                                '#e8af02',
+                                '#f02d13',
+                                '#E8F1F2'
+                            ],
+                            borderColor: 'rgba(255, 255, 255, 1)',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            legend: {
+                                display: false,
+                            },
+                            title: {
+                                display: true,
+                                text: 'Sum of Heating Demand (Specific_s) kWh/m2.a per Building Class',
+                                font: {
+                                    size: 16,
+                                    weight: 'bold'
+                                }
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true
+                            },
+                            x: {
+                                title: {
+                                    display: true,
+                                    text: 'Building Class'
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            function updateChartsForVisibleBuildings() {
+                var specificSFromVisibleTiles = [];
+                var yearOfCoFromVisibleTiles = [];
+
+                var visibleTiles = tileset._selectedTiles;
+                visibleTiles.forEach(function (tile) {
+                    extractAttributes(tile, specificSFromVisibleTiles, yearOfCoFromVisibleTiles);
+                });
+
+                createCharts(specificSFromVisibleTiles, yearOfCoFromVisibleTiles);
+            }
+
+            viewer.camera.changed.addEventListener(function () {
+                updateChartsForVisibleBuildings();
+            });
+        });
+    </script>
+</body>
+</html>
+
